@@ -1,0 +1,6 @@
+@echo off
+title Reiniciar Servidor - TerraEC2 Manager
+echo [INFO] Reiniciando o servidor...
+call parar.bat
+echo [INFO] Iniciando servidor novamente...
+call iniciar.bat
