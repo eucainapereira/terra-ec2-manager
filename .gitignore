@@ -1,0 +1,10 @@
+node_modules/
+backend/data.json
+backend/workspaces/
+*.pem
+*.exe
+.terraform/
+terraform.tfstate*
+*.log
+.DS_Store
+.env
