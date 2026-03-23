@@ -7,6 +7,10 @@
 
 Desenvolvido com auxílio de IA **TerraEC2 Manager** é uma interface visual para gerenciar a criação, monitoramento e destruição de instâncias EC2 na AWS utilizando **Terraform**. Desenvolvido para automação e otimização de código para simplificar o fluxo DevOps, permitindo que você suba infraestrutura com um clique e acompanhe algumas métricas em tempo real.
 
+## 🚀 Demonstração
+
+![Demo](./assets/demo.gif)
+
 ---
 
 ## ✨ Funcionalidades
@@ -72,6 +76,7 @@ node server.js
 ## 📁 Estrutura do Projeto
 
 ```text
+├── assets 
 ├── backend/          # Servidor Node.js e Gerenciador Terraform
 ├── frontend/         # Interface Dashboard (HTML/CSS/JS)
 ├── scripts/          # Atalhos de execução
