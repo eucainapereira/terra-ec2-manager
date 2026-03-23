@@ -9,7 +9,7 @@ Desenvolvido com auxílio de IA **TerraEC2 Manager** é uma interface visual par
 
 ## 🚀 Demonstração
 
-![Demo](./assets/demo.gif)
+![Demo](./assets/demo.gif.gif)
 
 ---
 
