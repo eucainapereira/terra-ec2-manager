@@ -2,7 +2,7 @@
 
 Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 
-## [1.1.0] - 2024-03-24
+## [1.1.0] - 24-03-2026
 ### Adicionado
 - **Controle Remoto de Instâncias**: Suporte para ações de **Iniciar**, **Parar** e **Reiniciar** diretamente pelo painel.
 - **Monitoramento Avançado**:
@@ -26,7 +26,7 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 
 ---
 
-## [1.0.0] - 2024-03-22
+## [1.0.0] - 22-03-2026
 ### Adicionado
 - **Gestão de Ciclo de Vida EC2**: Automação completa para criação e destruição de instâncias AWS EC2 via Terraform.
 - **Suporte Multi-SO**: Templates otimizados para Amazon Linux 2023, Ubuntu, Debian, RHEL e Windows Server (2019/2022).
