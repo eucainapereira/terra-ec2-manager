@@ -98,9 +98,17 @@ ${filterLines}
 `;
 }
 
-function generateMainTf({ id, name, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows }) {
-  const portList = ports && ports.length > 0 ? ports : [];
-  const hasSecurityGroup = portList.length > 0;
+function generateMainTf({ id, name, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows }) {
+  let inPorts = inboundPorts && inboundPorts.length > 0 ? inboundPorts : [];
+  let outPorts = outboundPorts && outboundPorts.length > 0 ? outboundPorts : [];
+  
+  if (autoSecurityGroup) {
+    const defaultIn = isWindows ? [3389, 80, 443] : [22, 80, 443];
+    inPorts = [...new Set([...inPorts, ...defaultIn])];
+    // Auto-SG usually allows all outbound
+    if (outPorts.length === 0) outPorts = [0];
+  }
+
   const effectiveKeyName = generateKeyPair ? `${id}-keypair` : keyName;
 
   // tls_private_key + aws_key_pair if auto-generating
@@ -116,12 +124,15 @@ resource "aws_key_pair" "keypair" {
 }
 ` : '';
 
-  const sgResource = hasSecurityGroup ? `
+  const hasInbound = inPorts.length > 0;
+  const allowAllOutbound = outPorts.length === 0 || outPorts.includes(0);
+
+  const sgResource = `
 resource "aws_security_group" "sg" {
   name        = "${name}-sg"
   description = "Security group for ${name} managed by TerraEC2"
 
-${portList.map(p => `  ingress {
+${inPorts.map(p => `  ingress {
     from_port   = ${p}
     to_port     = ${p}
     protocol    = "tcp"
@@ -129,19 +140,26 @@ ${portList.map(p => `  ingress {
     description = "Port ${p}"
   }`).join('\n\n')}
 
-  egress {
+${allowAllOutbound ? `  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-  }
+    description = "Allow all outbound"
+  }` : outPorts.map(p => `  egress {
+    from_port   = ${p}
+    to_port     = ${p}
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Porta de saida ${p}"
+  }`).join('\n\n')}
 
   tags = {
     Name      = "${name}-sg"
     ManagedBy = "terraform-dashboard"
   }
 }
-` : '';
+`;
 
   // Use aws_ami data source for known OS types (only needs ec2:DescribeImages)
   const amiDataBlock = generateAmiDataSource(osType);
@@ -158,7 +176,7 @@ ${portList.map(p => `  ingress {
     ? `  user_data = base64encode(<<-EOF\n${finalUserScript}\nEOF\n  )`
     : '';
 
-  const sgRef = hasSecurityGroup ? `  vpc_security_group_ids = [aws_security_group.sg.id]\n` : '';
+  const sgRef = `  vpc_security_group_ids = [aws_security_group.sg.id]\n`;
   const keyRef = effectiveKeyName
     ? `  key_name      = ${generateKeyPair ? 'aws_key_pair.keypair.key_name' : `"${effectiveKeyName}"`}\n`
     : '';
@@ -201,11 +219,10 @@ output "security_group_id" {
 ` : ''}`;
 }
 
-function writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows }) {
-  const portList = ports && ports.length > 0 ? ports : [];
+function writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows }) {
   fs.writeFileSync(path.join(workspacePath, 'provider.tf'), generateProviderTf(credentials, region));
-  fs.writeFileSync(path.join(workspacePath, 'main.tf'), generateMainTf({ id, name, instanceType, ami, osType, keyName, generateKeyPair, ports: portList, userScript, adminPassword, isWindows }));
-  fs.writeFileSync(path.join(workspacePath, 'outputs.tf'), generateOutputsTf(generateKeyPair, portList.length > 0));
+  fs.writeFileSync(path.join(workspacePath, 'main.tf'), generateMainTf({ id, name, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows }));
+  fs.writeFileSync(path.join(workspacePath, 'outputs.tf'), generateOutputsTf(generateKeyPair, true));
 }
 
 // ── Terraform runner ─────────────────────────────────────────────
@@ -236,6 +253,16 @@ function runTerraform(args, workspacePath, onLog) {
     });
     proc.on('error', (err) => reject(new Error(`Não foi possível iniciar o terraform: ${err.message}`)));
   });
+}
+
+async function ensureInit(workspacePath, onLog) {
+  const dotTerraform = path.join(workspacePath, '.terraform');
+  if (fs.existsSync(dotTerraform)) {
+    // Already initiated, skip to save time and avoid network issues
+    return;
+  }
+  onLog('▸ Inicializando workspace do Terraform...');
+  await runTerraform(['init'], workspacePath, onLog);
 }
 
 function parseOutputs(outputJson) {
@@ -273,10 +300,10 @@ function saveKeyPem(workspacePath, pemContent) {
 
 // ── Public API ────────────────────────────────────────────────────
 
-async function applyInstance({ id, workspacePath, credentials, name, region, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows }, onLog) {
-  writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows });
+async function applyInstance({ id, workspacePath, credentials, name, region, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows }, onLog) {
+  writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows });
 
-  await runTerraform(['init', '-upgrade'], workspacePath, onLog);
+  await ensureInit(workspacePath, onLog);
   await runTerraform(['apply', '-auto-approve'], workspacePath, onLog);
 
   const outputRaw = await runTerraform(['output', '-json'], workspacePath, onLog);
@@ -292,22 +319,22 @@ async function applyInstance({ id, workspacePath, credentials, name, region, ins
 }
 
 
-async function planInstance({ id, workspacePath, credentials, name, region, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows }, onLog) {
-  writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows });
-  await runTerraform(['init', '-upgrade'], workspacePath, onLog);
+async function planInstance({ id, workspacePath, credentials, name, region, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows }, onLog) {
+  writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows });
+  await ensureInit(workspacePath, onLog);
   await runTerraform(['plan'], workspacePath, onLog);
 }
 
-async function destroyInstance({ id, workspacePath, credentials, name, region, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows }, onLog) {
+async function destroyInstance({ id, workspacePath, credentials, name, region, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows }, onLog) {
   if (!fs.existsSync(workspacePath)) {
     onLog('[WARN] Workspace não encontrado, nada para destruir.');
     return;
   }
   
   // Regenerate files before destroying to fix syntax errors from older versions
-  writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, ports, userScript, adminPassword, isWindows });
+  writeTerraformFiles({ id, workspacePath, credentials, region, name, instanceType, ami, osType, keyName, generateKeyPair, inboundPorts, outboundPorts, autoSecurityGroup, userScript, adminPassword, isWindows });
   
-  await runTerraform(['init', '-upgrade'], workspacePath, onLog);
+  await ensureInit(workspacePath, onLog);
   await runTerraform(['destroy', '-auto-approve'], workspacePath, onLog);
 }
 
