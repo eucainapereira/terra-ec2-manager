@@ -11,6 +11,8 @@ let detailsInstanceId = null;
 let tfFiles = {};
 let activeTabName = 'connect';
 let activeTfFile = 'main.tf';
+let monitorInterval = null;
+let activePage = 'dashboard';
 
 // OS Presets — AMI is fetched at apply time via Terraform SSM data source
 // (no hardcoded AMI IDs here — they go stale quickly)
@@ -341,11 +343,16 @@ async function openDetails(id) {
   switchDetailsTab('connect');
   renderInfoGrid(inst);
   renderConnectTab(inst);
+  populateEditPorts(inst);
 
   document.getElementById('userdata-content').textContent = inst.userScript || '# Nenhum script configurado.';
 
   document.getElementById('btn-details-plan').onclick = () => { closeModal('modal-details'); planInstance(id); };
   document.getElementById('btn-details-destroy').onclick = () => { closeModal('modal-details'); confirmDestroy(id, inst.name); };
+  
+  document.getElementById('btn-details-start').onclick = () => instanceAction(id, 'start');
+  document.getElementById('btn-details-stop').onclick = () => instanceAction(id, 'stop');
+  document.getElementById('btn-details-reboot').onclick = () => instanceAction(id, 'reboot');
 
   openModal('modal-details');
 
@@ -366,7 +373,77 @@ function renderConnectTab(inst) {
   document.getElementById('windows-connect-panel').style.display = isWindows ? 'block' : 'none';
 
   refreshConnectTab(inst);
-  renderPortsBadges(inst.ports || []);
+}
+
+function populateEditPorts(inst) {
+  const inEl = document.getElementById('edit-inbound-ports');
+  const outEl = document.getElementById('edit-outbound-ports');
+  if (inEl) inEl.value = (inst.inboundPorts || []).join(', ');
+  if (outEl) outEl.value = (inst.outboundPorts || []).join(', ');
+  
+  const saveBtn = document.getElementById('btn-save-ports');
+  if (saveBtn) {
+    saveBtn.disabled = inst.managedBy === 'aws'; // Cannot edit external AWS instances SG here
+    saveBtn.style.opacity = inst.managedBy === 'aws' ? '0.5' : '1';
+    saveBtn.title = inst.managedBy === 'aws' ? 'Não é possível editar portas de instâncias não gerenciadas pelo Terraform' : 'Salvar novas portas';
+  }
+}
+
+async function saveUpdatedPorts() {
+  if (!detailsInstanceId) return;
+  const inst = instances[detailsInstanceId];
+  if (!inst || inst.managedBy === 'aws') return;
+
+  const inboundPorts = document.getElementById('edit-inbound-ports').value;
+  const outboundPorts = document.getElementById('edit-outbound-ports').value;
+  
+  const btn = document.getElementById('btn-save-ports');
+  const oldHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span> Salvando...';
+
+  try {
+    await apiPost(`/api/instances/${detailsInstanceId}/update-ports`, { inboundPorts, outboundPorts });
+    toast('Configuração de segurança enviada! Acompanhe o progresso no terminal.', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = oldHtml;
+  }
+}
+
+async function instanceAction(id, action) {
+  const inst = instances[id];
+  if (!inst) return;
+
+  const labels = { start: 'Iniciando', stop: 'Parando', reboot: 'Reiniciando' };
+  const btnId = `btn-details-${action}`;
+  const btn = document.getElementById(btnId);
+  const oldHtml = btn ? btn.innerHTML : '';
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<span class="loading-spinner"></span> ${labels[action]}...`;
+  }
+
+  try {
+    await apiPost(`/api/instances/${id}/${action}`, {});
+    toast(`Solicitação para ${labels[action].toLowerCase()} enviada com sucesso!`, 'success');
+    // The backend will broadcast an update, but we can optimistically update local state
+    if (action === 'start') instances[id].state = 'pending';
+    if (action === 'stop') instances[id].state = 'stopping';
+    if (action === 'reboot') instances[id].state = 'rebooting';
+    renderTables();
+    updateStats();
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = oldHtml;
+    }
+  }
 }
 
 function refreshConnectTab(inst) {
@@ -446,12 +523,7 @@ function refreshConnectTab(inst) {
 }
 
 function renderPortsBadges(ports) {
-  const el = document.getElementById('ports-badges');
-  if (!ports.length) {
-    el.innerHTML = '<span style="color:var(--text-muted);font-size:12px">Nenhuma porta configurada.</span>';
-    return;
-  }
-  el.innerHTML = ports.map(p => `<span class="port-badge">TCP ${p}</span>`).join('');
+  // Deprecated by editable fields, but keeping if needed for other places
 }
 
 function renderInfoGrid(inst) {
@@ -486,6 +558,8 @@ function showTfFile(filename) {
 let cpuChart = null;
 let networkChart = null;
 let diskChart = null;
+let iopsChart = null;
+let cpuCreditsChart = null;
 let healthChart = null;
 
 function formatBytes(bytes) {
@@ -517,26 +591,46 @@ function switchDetailsTab(tabName) {
   document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.toggle('active', panel.id === `tab-${tabName}`));
 }
 
-async function loadMetrics(id) {
+async function loadMetrics(id, isAuto = false) {
   const inst = instances[id];
   if (!inst) return;
 
   const emptyEl = document.getElementById('page-metrics-empty');
   const loadingEl = document.getElementById('page-metrics-loading');
   const contentEl = document.getElementById('page-metrics-content');
+  const controlsEl = document.getElementById('monitor-controls');
   
-  emptyEl.style.display = 'none';
-  loadingEl.style.display = 'block';
-  loadingEl.textContent = 'Carregando métricas do CloudWatch...';
-  contentEl.style.display = 'none';
+  const duration = document.getElementById('monitor-duration')?.value || 180;
+  const period = document.getElementById('monitor-period')?.value || 300;
+
+  if (!isAuto) {
+    emptyEl.style.display = 'none';
+    loadingEl.style.display = 'block';
+    loadingEl.textContent = 'Carregando métricas do CloudWatch...';
+    contentEl.style.display = 'none';
+    if (controlsEl) controlsEl.style.display = 'flex';
+  }
 
   try {
-    const data = await apiGet(`/api/instances/${id}/metrics`);
-    loadingEl.style.display = 'none';
+    const data = await apiGet(`/api/instances/${id}/metrics?duration=${duration}&period=${period}`);
+    if (!isAuto) loadingEl.style.display = 'none';
     contentEl.style.display = 'flex';
     renderCharts(data);
+
+    // Set/Update interval
+    if (monitorInterval) clearInterval(monitorInterval);
+    const intervalMs = parseInt(period) * 1000;
+    monitorInterval = setInterval(() => {
+      if (activeMonitorId === id && activePage === 'monitor') {
+        loadMetrics(id, true);
+      } else {
+        clearInterval(monitorInterval);
+        monitorInterval = null;
+      }
+    }, intervalMs);
+
   } catch (err) {
-    loadingEl.textContent = 'Erro ao carregar métricas (Verifique credenciais AWS).';
+    if (!isAuto) loadingEl.textContent = 'Erro ao carregar métricas (Verifique credenciais AWS).';
     console.error(err);
   }
 }
@@ -546,11 +640,15 @@ function renderCharts(data) {
   const ctxNet = document.getElementById('pageNetworkChart').getContext('2d');
   const ctxDisk = document.getElementById('pageDiskChart').getContext('2d');
   const ctxHealth = document.getElementById('pageHealthChart').getContext('2d');
+  const ctxIops = document.getElementById('pageIopsChart').getContext('2d');
+  const ctxCpuCreds = document.getElementById('pageCpuCreditsChart').getContext('2d');
 
   if (cpuChart) cpuChart.destroy();
   if (networkChart) networkChart.destroy();
   if (diskChart) diskChart.destroy();
   if (healthChart) healthChart.destroy();
+  if (iopsChart) iopsChart.destroy();
+  if (cpuCreditsChart) cpuCreditsChart.destroy();
 
   const timeLabels = data.cpu.map(d => {
     const dObj = new Date(d.timestamp);
@@ -673,6 +771,65 @@ function renderCharts(data) {
       plugins: { legend: { display: false } }
     }
   });
+
+  // --- Disk IOPS ---
+  const hasIopsData = data.diskIopsRead.some(d => d.value > 0) || data.diskIopsWrite.some(d => d.value > 0);
+  document.getElementById('iops-unit').textContent = hasIopsData ? '(Ops/s)' : '(Sem dados)';
+
+  iopsChart = new Chart(ctxIops, {
+    type: 'line',
+    data: {
+      labels: timeLabels,
+      datasets: [
+        {
+          label: 'Leitura Ops',
+          data: data.diskIopsRead.map(d => d.value),
+          borderColor: '#10b981',
+          borderWidth: 2,
+          pointRadius: 2,
+          tension: 0.3
+        },
+        {
+          label: 'Escrita Ops',
+          data: data.diskIopsWrite.map(d => d.value),
+          borderColor: '#ef4444',
+          borderWidth: 2,
+          pointRadius: 2,
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true } },
+      plugins: { legend: { position: 'top', labels: { boxWidth: 12 } } }
+    }
+  });
+
+  // --- CPU Credits ---
+  const hasCredits = data.cpuCredits.length > 0;
+  cpuCreditsChart = new Chart(ctxCpuCreds, {
+    type: 'line',
+    data: {
+      labels: timeLabels,
+      datasets: [{
+        label: 'Créditos',
+        data: data.cpuCredits.map(d => d.value),
+        borderColor: '#06b6d4',
+        backgroundColor: 'rgba(6, 182, 212, 0.1)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true } },
+      plugins: { legend: { display: false } }
+    }
+  });
 }
 
 // ── OS Template Selector ──────────────────────────────────────────
@@ -787,8 +944,9 @@ async function createInstance(action = 'apply') {
   const name = document.getElementById('inst-name').value.trim();
   const region = document.getElementById('inst-region').value;
   const instanceType = document.getElementById('inst-type').value;
-  const amiField = document.getElementById('inst-ami').value.trim();
-  const ports = document.getElementById('inst-ports').value.trim();
+  const inboundPorts = document.getElementById('inst-inbound-ports').value.trim();
+  const outboundPorts = document.getElementById('inst-outbound-ports').value.trim();
+  const autoSecurityGroup = document.getElementById('inst-auto-sg').checked;
   const userScript = document.getElementById('inst-userdata').value.trim();
   const adminPassword = document.getElementById('inst-admin-password').value.trim();
 
@@ -819,7 +977,9 @@ async function createInstance(action = 'apply') {
       generateKeyPair,
       isWindows: selectedOsIsWindows,
       osType: selectedOS,
-      ports: ports || undefined,
+      inboundPorts: inboundPorts || undefined,
+      outboundPorts: outboundPorts || undefined,
+      autoSecurityGroup,
       userScript: userScript || undefined,
       adminPassword: selectedOsIsWindows ? adminPassword : undefined
     });
@@ -845,12 +1005,19 @@ async function saveCredentials() {
 
 // ── Navigation ────────────────────────────────────────────────────
 function switchPage(page) {
+  activePage = page;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById(`page-${page}`)?.classList.add('active');
   document.getElementById(`nav-${page}`)?.classList.add('active');
   const titles = { dashboard: 'Dashboard', instances: 'Instâncias', terminal: 'Terminal ao Vivo', monitor: 'Monitoramento AWS' };
   document.getElementById('page-title').textContent = titles[page] || page;
+
+  // Clear interval if not on monitor page
+  if (page !== 'monitor' && monitorInterval) {
+    clearInterval(monitorInterval);
+    monitorInterval = null;
+  }
 }
 
 function openModal(id) { document.getElementById(id).classList.add('open'); }
@@ -874,6 +1041,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Init OS selector — fill AMI on load
   fillAmiForRegion();
 
+  // Init Auto-SG toggle
+  const autoSgCheck = document.getElementById('inst-auto-sg');
+  if (autoSgCheck) {
+    const isChecked = autoSgCheck.checked;
+    ['inst-inbound-ports', 'inst-outbound-ports'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.disabled = isChecked;
+        el.style.opacity = isChecked ? '0.6' : '1';
+      }
+    });
+  }
+
   // Nav
   document.querySelectorAll('[data-page]').forEach(el => {
     el.addEventListener('click', e => { e.preventDefault(); switchPage(el.dataset.page); });
@@ -883,6 +1063,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-new-instance').addEventListener('click', () => openModal('modal-create'));
   document.getElementById('btn-new-instance-2').addEventListener('click', () => openModal('modal-create'));
   document.getElementById('btn-credentials').addEventListener('click', () => openModal('modal-credentials'));
+
+  const durSel = document.getElementById('monitor-duration');
+  if (durSel) durSel.addEventListener('change', () => { if (activeMonitorId) loadMetrics(activeMonitorId); });
+  const perSel = document.getElementById('monitor-period');
+  if (perSel) perSel.addEventListener('change', () => { if (activeMonitorId) loadMetrics(activeMonitorId); });
 
   // Close modals
   document.querySelectorAll('[data-close]').forEach(btn => btn.addEventListener('click', () => closeModal(btn.dataset.close)));
@@ -899,6 +1084,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Destroy
   document.getElementById('btn-confirm-destroy').addEventListener('click', destroyInstance);
+
+  // Save ports in details modal
+  document.getElementById('btn-save-ports')?.addEventListener('click', saveUpdatedPorts);
 
   // Terminal
   document.getElementById('terminal-filter').addEventListener('change', e => {
@@ -941,6 +1129,18 @@ document.addEventListener('DOMContentLoaded', () => {
     radio.addEventListener('change', () => {
       const showField = radio.value === 'existing' && radio.checked;
       document.getElementById('existing-key-field').style.display = showField ? 'block' : 'none';
+    });
+  });
+
+  // Auto-SG toggle
+  document.getElementById('inst-auto-sg').addEventListener('change', (e) => {
+    const isChecked = e.target.checked;
+    ['inst-inbound-ports', 'inst-outbound-ports'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.disabled = isChecked;
+        el.style.opacity = isChecked ? '0.6' : '1';
+      }
     });
   });
 
