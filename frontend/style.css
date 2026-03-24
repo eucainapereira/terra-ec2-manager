@@ -302,6 +302,8 @@ body { display: flex; overflow: hidden; }
 .badge-creating::before { background: var(--yellow); animation: pulse 0.8s infinite; }
 .badge-destroying { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.25); }
 .badge-destroying::before { background: var(--red); animation: pulse 0.6s infinite; }
+.badge-rebooting { background: rgba(59,130,246,0.12); color: var(--blue); border: 1px solid rgba(59,130,246,0.25); }
+.badge-rebooting::before { background: var(--blue); animation: pulse 1s infinite; }
 .badge-error  { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.25); }
 .badge-error::before { background: var(--red); }
 
@@ -368,6 +370,10 @@ body { display: flex; overflow: hidden; }
 .btn-icon:hover { border-color: var(--border-hover); color: var(--text-primary); background: rgba(255,255,255,0.04); }
 .btn-icon.danger:hover { border-color: var(--red); color: var(--red); background: rgba(239,68,68,0.08); }
 .btn-icon.plan:hover { border-color: var(--purple-light); color: var(--purple-light); background: rgba(124,58,237,0.08); }
+
+.action-btn-green:hover { background: rgba(16,185,129,0.15) !important; color: var(--green) !important; border-color: var(--green) !important; }
+.action-btn-yellow:hover { background: rgba(245,158,11,0.15) !important; color: var(--yellow) !important; border-color: var(--yellow) !important; }
+.action-btn-blue:hover { background: rgba(59,130,246,0.15) !important; color: var(--blue) !important; border-color: var(--blue) !important; }
 
 .action-group { display: flex; align-items: center; gap: 6px; }
 
