@@ -118,6 +118,33 @@
         </div>
       </div>
 
+      <div id="monitor-controls" style="display: none; padding: 12px 20px; background: var(--bg-card2); border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0 0 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+        <div class="form-group" style="flex: 0 0 auto; width: 140px; margin: 0;">
+          <label class="form-label" style="font-size: 10px; margin-bottom: 4px;">Duração</label>
+          <select class="form-input" id="monitor-duration" style="padding: 5px 8px; font-size: 12px;">
+            <option value="60">Última 1 hora</option>
+            <option value="180" selected>Últimas 3 horas</option>
+            <option value="360">Últimas 6 horas</option>
+            <option value="720">Últimas 12 horas</option>
+            <option value="1440">Últimas 24 horas</option>
+            <option value="4320">Últimos 3 dias</option>
+            <option value="10080">Últimos 7 dias</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex: 0 0 auto; width: 140px; margin: 0;">
+          <label class="form-label" style="font-size: 10px; margin-bottom: 4px;">Granularidade</label>
+          <select class="form-input" id="monitor-period" style="padding: 5px 8px; font-size: 12px;">
+            <option value="60">1 Minuto</option>
+            <option value="300" selected>5 Minutos</option>
+            <option value="900">15 Minutos</option>
+            <option value="3600">1 Hora</option>
+          </select>
+        </div>
+        <div style="flex-grow: 1; text-align: right;">
+          <span class="form-hint" style="font-size: 11px;">Métricas de 1-minuto exigem Monitoramento Detalhado na AWS.</span>
+        </div>
+      </div>
+
       <div id="page-metrics-loading" style="text-align:center; padding: 40px; color:var(--text-muted); display:none;">Carregando métricas do CloudWatch...</div>
       <div id="page-metrics-empty" style="text-align:center; padding: 40px; color:var(--text-muted);">Selecione uma instância acima para iniciar o monitoramento.</div>
       
@@ -160,6 +187,26 @@
             </div>
             <div class="chart-canvas-container">
               <canvas id="pageHealthChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Disk IOPS -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <h4 class="chart-card-title">Operações de Disco (IOPS) <span class="metric-unit" id="iops-unit">(Ops/s)</span></h4>
+            </div>
+            <div class="chart-canvas-container">
+              <canvas id="pageIopsChart"></canvas>
+            </div>
+          </div>
+
+          <!-- CPU Credits -->
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <h4 class="chart-card-title">Créditos de CPU <span class="metric-unit">(Balance)</span></h4>
+            </div>
+            <div class="chart-canvas-container">
+              <canvas id="pageCpuCreditsChart"></canvas>
             </div>
           </div>
         </div>
@@ -263,9 +310,20 @@
             <span class="form-hint" id="ami-hint">Selecione um sistema operacional para preencher automaticamente</span>
           </div>
           <div class="form-group">
-            <label class="form-label">Portas Abertas</label>
-            <input type="text" class="form-input" id="inst-ports" placeholder="22, 80, 443" />
-            <span class="form-hint">Security Group TCP (separadas por vírgula) — Windows inclui 3389 automaticamente</span>
+            <label class="form-label">PORTA DE ENTRADA</label>
+            <input type="text" class="form-input" id="inst-inbound-ports" placeholder="22, 80, 443" />
+            <span class="form-hint">TCP (separadas por vírgula). Windows inclui 3389 automaticamente.</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">PORTA DE SAÍDA</label>
+            <input type="text" class="form-input" id="inst-outbound-ports" placeholder="0 (todas)" />
+            <span class="form-hint">Use "0" ou deixe vazio para permitir todo o tráfego de saída.</span>
+          </div>
+          <div class="form-group" style="grid-column: span 2">
+            <label class="checkbox-option" style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+              <input type="checkbox" id="inst-auto-sg" checked />
+              <span>Deixar a AWS configurar os grupos de segurança (Recomendado)</span>
+            </label>
           </div>
         </div>
 
@@ -441,9 +499,24 @@ systemctl start nginx"></textarea>
               <div class="ports-section" id="ports-section">
                 <div class="connect-header">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                  <span>Security Group — Portas Abertas</span>
+                  <span>Configuração de Segurança</span>
                 </div>
-                <div class="ports-badges" id="ports-badges"></div>
+                <div class="ports-edit-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+                  <div class="form-group">
+                    <label class="form-label" style="font-size: 11px;">PORTA DE ENTRADA</label>
+                    <input type="text" class="form-input form-input-sm" id="edit-inbound-ports" placeholder="22, 80" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label" style="font-size: 11px;">PORTA DE SAÍDA</label>
+                    <input type="text" class="form-input form-input-sm" id="edit-outbound-ports" placeholder="0 (todas)" />
+                  </div>
+                </div>
+                <div style="margin-top: 12px; display: flex; justify-content: flex-end;">
+                  <button class="btn-primary btn-sm" id="btn-save-ports">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    Salvar Alterações
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -546,12 +619,28 @@ systemctl start nginx"></textarea>
           <div class="info-grid" id="info-grid"></div>
         </div>
       </div>
-      <div class="modal-footer">
-        <button class="btn-ghost" data-close="modal-details">Fechar</button>
+      <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="btn-ghost btn-sm" data-close="modal-details">Fechar</button>
         <button class="btn-secondary btn-sm" id="btn-details-plan">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           Executar Plan
         </button>
+        
+        <div style="flex-grow: 1; display: flex; gap: 6px;">
+          <button class="btn-secondary btn-sm action-btn-green" id="btn-details-start" title="Iniciar Instância">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 3l14 9-14 9V3z"/></svg>
+            Iniciar
+          </button>
+          <button class="btn-secondary btn-sm action-btn-yellow" id="btn-details-stop" title="Parar Instância">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            Parar
+          </button>
+          <button class="btn-secondary btn-sm action-btn-blue" id="btn-details-reboot" title="Reiniciar Instância">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Reiniciar
+          </button>
+        </div>
+
         <button class="btn-danger btn-sm" id="btn-details-destroy">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           Destruir
