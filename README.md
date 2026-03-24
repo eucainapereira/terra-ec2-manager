@@ -81,7 +81,8 @@ node server.js
 ├── frontend/         # Interface Dashboard (HTML/CSS/JS)
 ├── scripts/          # Atalhos de execução
 ├── .gitignore
-└── README.md
+├── README.md
+└── changelog.md
 ```
 
 ---
